@@ -19,6 +19,22 @@
    - 図をドラッグで移動
    - 右上ツールバーからSVG/PNGコピーや閉じる操作
 
+インストール
+導入方法は主に2つあります。
+
+1. GitHubリリースから手動インストール
+GitHubリリースページからobsidian-mermaid-zoom-plugin.zipをダウンロードします。
+zipファイルを解凍し、Obsidianのプラグインフォルダに移動させます。
+Obsidianの設定画面から本プラグインを有効化してください。
+
+2. BRATプラグインを使ってインストール（おすすめ）
+BRAT（Beta Reviewers Auto-update Tool）プラグインを使うと、より簡単に導入・アップデートができます。
+
+Obsidianのコミュニティプラグインから「BRAT」を検索・インストールします。
+BRATの設定画面で「Add Beta Plugin」から本プラグインのGitHubリポジトリURL（`https://github.com/Mekann2904/obsidian-mermaid-zoom-plugin`）を追加します。
+追加後、BRAT経由で本プラグインをインストール・有効化できます。
+BRATを使う方法が最も簡単でおすすめです。アップデートも自動で反映されるはずです。
+
 ## 注意事項
 - Obsidianのテーマに関係なく、ズーム時は白背景で表示されます。
 
