@@ -24,5 +24,3 @@
 
 ## ライセンス
 MIT
-# obsidian-mermaid-zoom-plugin
-# obsidian-mermaid-zoom-plugin
