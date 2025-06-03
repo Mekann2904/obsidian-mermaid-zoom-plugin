@@ -1,16 +1,28 @@
-import { Plugin, Notice } from "obsidian";
+import { Plugin, Notice, PluginSettingTab, App, Setting } from "obsidian";
+
+// --- 設定インターフェース ---
+interface MermaidZoomPluginSettings {
+  pngScale: number;
+}
+
+const DEFAULT_SETTINGS: MermaidZoomPluginSettings = {
+  pngScale: 10,
+};
 
 export default class MermaidZoomPlugin extends Plugin {
   private currentModal: HTMLElement | null = null;
+  settings: MermaidZoomPluginSettings;
 
-  onload() {
-    this.injectCss(); // スタイルをドキュメントに適用
+  async onload() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    await this.injectCss();
+
+    this.addSettingTab(new MermaidZoomSettingTab(this.app, this));
 
     this.registerDomEvent(document, "click", (event) => {
       const target = event.target as HTMLElement;
       const mermaidElement = target.closest(".mermaid") as HTMLElement;
       if (mermaidElement) {
-        // 元のMermaidコードブロックを探す
         const sourceCodeBlock = this.findMermaidSource(mermaidElement);
         this.showPopup(mermaidElement, sourceCodeBlock);
       }
@@ -18,62 +30,60 @@ export default class MermaidZoomPlugin extends Plugin {
   }
 
   /**
-   * プラグイン用のCSSを<head>に挿入します。
+   * 【修正済み】プラグイン用のCSSをインライン<style>として<head>に挿入します。
+   * CSPによる外部ファイルのブロックを回避します。
    */
-  injectCss() {
+  async injectCss() {
     const styleId = "mermaid-zoom-plugin-styles";
     if (document.getElementById(styleId)) return;
 
-    const style = document.createElement("link");
+    const style = document.createElement("style");
     style.id = styleId;
-    style.rel = "stylesheet";
-    style.type = "text/css";
-    style.href = this.app.vault.adapter.getResourcePath(`${this.manifest.dir}/styles.css`);
-    document.head.appendChild(style);
+    try {
+      style.textContent = await this.app.vault.adapter.read(
+        `${this.manifest.dir}/styles.css`
+      );
+      document.head.appendChild(style);
+    } catch(e) {
+      console.error("Mermaid Zoom Plugin: Failed to load styles.css.", e);
+    }
   }
 
   /**
    * レンダリングされたMermaid要素から、元のコードブロックを探します。
-   * @param mermaidEl 描画されたMermaidのHTMLElement
-   * @returns 元のコードが含まれる要素 (なければnull)
    */
   findMermaidSource(mermaidEl: HTMLElement): HTMLElement | null {
-    // Obsidianの構造上、描画された要素の直前かその親の直前にコードブロックがある
     let previousEl = mermaidEl.previousElementSibling;
     if (previousEl && previousEl.querySelector("code.language-mermaid")) {
-        return previousEl.querySelector("code.language-mermaid") as HTMLElement;
+      return previousEl.querySelector("code.language-mermaid") as HTMLElement;
     }
-    // 親要素のさらに前も探す
     previousEl = mermaidEl.parentElement?.previousElementSibling ?? null;
-     if (previousEl && previousEl.querySelector("code.language-mermaid")) {
-        return previousEl.querySelector("code.language-mermaid") as HTMLElement;
+    if (previousEl && previousEl.querySelector("code.language-mermaid")) {
+      return previousEl.querySelector("code.language-mermaid") as HTMLElement;
     }
     return null;
   }
 
-
   /**
    * ポップアップモーダルを表示します。
-   * @param element クリックされたMermaid要素
-   * @param sourceCodeEl Mermaidのソースコードが含まれる要素
    */
   showPopup(element: HTMLElement, sourceCodeEl: HTMLElement | null) {
     if (this.currentModal) {
       this.currentModal.remove();
     }
 
+    // (モーダル表示のロジックは変更なし)
     let zoomLevel = 1;
     let isPanning = false;
     let panX = 0, panY = 0;
     let lastMouseX = 0, lastMouseY = 0;
 
-    // --- 各種要素の作成 ---
     const modal = this.createElement("div", "mermaid-zoom-modal");
     const content = this.createElement("div", "mermaid-zoom-content");
     const clonedElement = element.cloneNode(true) as HTMLElement;
     clonedElement.className = "mermaid-zoom-clone";
-
-    // ObsidianのテーマクラスをクローンSVGにも付与
+    
+    // ポップアップ内のSVGはコピー対象ではないため、テーマクラスの適用は維持
     const themeClass = document.body.classList.contains("theme-dark") ? "theme-dark" : "theme-light";
     clonedElement.classList.add(themeClass);
     const svg = clonedElement.querySelector("svg");
@@ -83,15 +93,20 @@ export default class MermaidZoomPlugin extends Plugin {
 
     const toolbar = this.createToolbar(
       () => closeModal(),
-      () => this.copyAsSvg(clonedElement),
-      () => this.copyAsPng(clonedElement)
+      // コピー機能にはクローンされた要素ではなく、元の `element` を渡す
+      () => this.copyAsSvg(element), 
+      () => this.copyAsPng(element)
     );
     
-    // --- ズームコントロールの作成 ---
-    const { zoomInButton, zoomOutButton, zoomDisplay, resetZoomButton } = this.createZoomControls(() => zoomLevel, (newZoom) => {
-      zoomLevel = newZoom;
-      updateTransform();
-    });
+    const { zoomInButton, zoomOutButton, zoomDisplay, resetZoomButton } = this.createZoomControls(
+      () => zoomLevel, 
+      (newZoom, newPanX = 0, newPanY = 0) => {
+        zoomLevel = newZoom;
+        panX = newPanX;
+        panY = newPanY;
+        updateTransform();
+      }
+    );
     toolbar.append(zoomOutButton, zoomDisplay, zoomInButton, resetZoomButton);
 
     content.appendChild(clonedElement);
@@ -99,195 +114,202 @@ export default class MermaidZoomPlugin extends Plugin {
     document.body.appendChild(modal);
     this.currentModal = modal;
 
-    // --- イベントリスナー設定 ---
+    // --- イベントリスナー ---
     const closeModal = () => {
       modal.remove();
       document.removeEventListener("keydown", handleKeyDown);
       this.currentModal = null;
     };
-    
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") closeModal();
     };
     document.addEventListener("keydown", handleKeyDown);
-    
     modal.addEventListener("click", (e) => {
       if (e.target === modal) closeModal();
     });
 
-    // --- パンニング（ドラッグ移動）処理 ---
-    content.addEventListener('mousedown', (e) => {
-        isPanning = true;
-        content.classList.add('grabbing');
-        lastMouseX = e.pageX;
-        lastMouseY = e.pageY;
-    });
+    // (パン・ズーム処理は変更なし)
+    content.addEventListener('mousedown', (e) => { isPanning = true; content.classList.add('grabbing'); lastMouseX = e.pageX; lastMouseY = e.pageY; });
+    content.addEventListener('mouseleave', () => { isPanning = false; content.classList.remove('grabbing'); });
+    content.addEventListener('mouseup', () => { isPanning = false; content.classList.remove('grabbing'); });
+    content.addEventListener('mousemove', (e) => { if (!isPanning) return; e.preventDefault(); const dx = e.pageX - lastMouseX; const dy = e.pageY - lastMouseY; panX += dx; panY += dy; lastMouseX = e.pageX; lastMouseY = e.pageY; updateTransform(); });
+    const updateTransform = () => { clonedElement.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`; zoomDisplay.textContent = `${Math.round(zoomLevel * 100)}%`; };
+    content.addEventListener("wheel", (e) => { e.preventDefault(); const delta = e.deltaY < 0 ? 0.2 : -0.2; zoomLevel = Math.max(0.2, zoomLevel + delta); updateTransform(); }, { passive: false });
+    requestAnimationFrame(() => { const contentRect = content.getBoundingClientRect(); const cloneRect = clonedElement.getBoundingClientRect(); const scaleX = contentRect.width / cloneRect.width; const scaleY = contentRect.height / cloneRect.height; zoomLevel = Math.min(scaleX, scaleY) * 0.95; panX = 0; panY = 0; updateTransform(); });
+  }
 
-    content.addEventListener('mouseleave', () => {
-        isPanning = false;
-        content.classList.remove('grabbing');
-    });
+  // --- ヘルパーメソッド群 (変更なし) ---
+  private createElement<K extends keyof HTMLElementTagNameMap>(tagName: K, className: string): HTMLElementTagNameMap[K] { const el = document.createElement(tagName); el.className = className; return el; }
+  private createToolbar(onClose: () => void, onCopySvg: () => void, onCopyPng: () => void): HTMLElement { const toolbar = this.createElement("div", "mermaid-zoom-toolbar"); const closeButton = this.createButton("✖", "閉じる", onClose); const copySvgButton = this.createButton("SVG", "SVGをコピー", onCopySvg); const copyPngButton = this.createButton("PNG", "PNGをコピー", onCopyPng); toolbar.append(copySvgButton, copyPngButton, closeButton); return toolbar; }
+  private createZoomControls(getZoom: () => number, onZoom: (zoom: number, panX?: number, panY?: number) => void) { const zoomOutButton = this.createButton("－", "縮小", () => onZoom(Math.max(0.2, getZoom() - 0.2))); const zoomInButton = this.createButton("＋", "拡大", () => onZoom(getZoom() + 0.2)); const resetZoomButton = this.createButton("1:1", "リセット", () => onZoom(1.0, 0, 0)); const zoomDisplay = this.createElement("span", "zoom-display"); zoomDisplay.textContent = "100%"; return { zoomInButton, zoomOutButton, zoomDisplay, resetZoomButton }; }
+  private createButton(text: string, title: string, onClick: () => void): HTMLButtonElement { const button = this.createElement("button", ""); button.textContent = text; button.title = title; button.addEventListener("click", (e) => { e.stopPropagation(); onClick(); }); return button; }
 
-    content.addEventListener('mouseup', () => {
-        isPanning = false;
-        content.classList.remove('grabbing');
-    });
+  /**
+   * 【新規追加】オリジナルのSVGからスタイルをインライン化したクローンを生成します。
+   * fill="none" を尊重し、線や矢印が黒く塗りつぶされる問題を回避します。
+   */
+  private cloneSvgWithInlineStyles(orig: SVGSVGElement): SVGSVGElement {
+    const clone = orig.cloneNode(true) as SVGSVGElement;
 
-    content.addEventListener('mousemove', (e) => {
-        if (!isPanning) return;
-        e.preventDefault();
-        const dx = e.pageX - lastMouseX;
-        const dy = e.pageY - lastMouseY;
-        panX += dx;
-        panY += dy;
-        lastMouseX = e.pageX;
-        lastMouseY = e.pageY;
-        updateTransform();
-    });
+    const traverse = (src: Element, dst: Element) => {
+      const comp  = getComputedStyle(src);
+      const props = ["stroke", "stroke-width", "opacity", "color", "font", "font-family", "font-size"] as const;
 
-    // --- ズーム処理 ---
-    const updateTransform = (newZoomLevel?: number) => {
-        if (newZoomLevel) zoomLevel = newZoomLevel;
-        clonedElement.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
-        zoomDisplay.textContent = `${Math.round(zoomLevel * 100)}%`;
+      // --- fill の扱いだけ特別 ---
+      const origFillAttr = (src as HTMLElement).getAttribute("fill");
+      const compFill     = comp.getPropertyValue("fill");
+
+      if (origFillAttr && origFillAttr.trim() === "none") {
+        // 元が none なら明示的に none を指定
+        (dst as HTMLElement).setAttribute("fill", "none");
+      } else if (compFill && compFill !== "rgba(0, 0, 0, 0)") {
+        // none 以外ならインライン化
+        (dst as HTMLElement).style.setProperty("fill", compFill);
+      }
+      // --------------------------------
+
+      props.forEach(p => {
+        const v = comp.getPropertyValue(p);
+        if (v && v !== "none" && v !== "rgba(0, 0, 0, 0)") {
+          (dst as HTMLElement).style.setProperty(p, v);
+        }
+      });
+
+      Array.from(src.children).forEach((c, i) => traverse(c, dst.children[i]));
     };
 
-    content.addEventListener("wheel", (e) => {
-        e.preventDefault();
-        const delta = e.deltaY < 0 ? 0.2 : -0.2;
-        zoomLevel = Math.max(0.2, zoomLevel + delta);
-        updateTransform();
-      }, { passive: false }
-    );
+    traverse(orig, clone);
+    return clone;
+  }
 
-    // --- 初期表示時の自動ズーム ---
-    requestAnimationFrame(() => {
-        const contentRect = content.getBoundingClientRect();
-        const cloneRect = clonedElement.getBoundingClientRect();
-        const scaleX = contentRect.width / cloneRect.width;
-        const scaleY = contentRect.height / cloneRect.height;
-        const initialZoom = Math.min(scaleX, scaleY) * 0.95;
-        zoomLevel = initialZoom;
-        panX = 0;
-        panY = 0;
-        updateTransform();
+  /**
+   * foreignObject を中心座標の <text> 要素に変換（Mermaid v10以降のhtmlLabels対応）
+   */
+  private replaceHtmlLabels(svg: SVGSVGElement) {
+    svg.querySelectorAll("foreignObject").forEach(fo => {
+      const span = fo.querySelector("span, div");
+      const label = span?.textContent?.trim();
+      if (!label) return;
+
+      const x = parseFloat(fo.getAttribute("x") ?? "0");
+      const y = parseFloat(fo.getAttribute("y") ?? "0");
+      const w = parseFloat(fo.getAttribute("width")  ?? "0");
+      const h = parseFloat(fo.getAttribute("height") ?? "0");
+
+      const textEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      textEl.setAttribute("x", (x + w / 2).toString());
+      textEl.setAttribute("y", (y + h / 2).toString());
+      textEl.setAttribute("text-anchor", "middle");
+      textEl.setAttribute("dominant-baseline", "central");
+
+      // 元divのスタイルを継承
+      const comp = getComputedStyle(span as Element);
+      ["font-family", "font-size", "font-weight", "fill", "color"].forEach(p => {
+        textEl.style.setProperty(p, comp.getPropertyValue(p));
+      });
+
+      textEl.textContent = label;
+      fo.parentNode?.replaceChild(textEl, fo);
     });
   }
 
-  // --- ヘルパーメソッド群 ---
-
   /**
-   * 指定したクラス名を持つHTMLElementを生成します。
+   * 【修正済み】Mermaid図をSVGとしてクリップボードにコピーします。
    */
-  private createElement<K extends keyof HTMLElementTagNameMap>(tagName: K, className: string): HTMLElementTagNameMap[K] {
-    const el = document.createElement(tagName);
-    el.className = className;
-    return el;
-  }
-
-  /**
-   * 操作用のツールバーを生成します。
-   */
-  private createToolbar(onClose: () => void, onCopySvg: () => void, onCopyPng: () => void): HTMLElement {
-    const toolbar = this.createElement("div", "mermaid-zoom-toolbar");
-    const closeButton = this.createButton("✖", "閉じる", onClose);
-    const copySvgButton = this.createButton("SVG", "SVGをコピー", onCopySvg);
-    const copyPngButton = this.createButton("PNG", "PNGをコピー", onCopyPng);
-    toolbar.append(copySvgButton, copyPngButton, closeButton);
-    return toolbar;
-  }
-
-  /**
-   * ズーム関連のコントロールを生成します。
-   */
-  private createZoomControls(getZoom: () => number, onZoom: (zoom: number) => void) {
-    const zoomOutButton = this.createButton("－", "縮小", () => onZoom(Math.max(0.2, getZoom() - 0.2)));
-    const zoomInButton = this.createButton("＋", "拡大", () => onZoom(getZoom() + 0.2));
-    const resetZoomButton = this.createButton("1:1", "リセット", () => {
-        // 初期表示時の自動ズームを再実行するロジックをここに入れるか、単に1に戻す
-        onZoom(1.0); 
-    });
-    
-    const zoomDisplay = this.createElement("span", "zoom-display");
-    zoomDisplay.textContent = "100%";
-
-    return { zoomInButton, zoomOutButton, zoomDisplay, resetZoomButton };
-  }
-  
-  /**
-   * ボタン要素を生成します。
-   */
-  private createButton(text: string, title: string, onClick: () => void): HTMLButtonElement {
-    const button = this.createElement("button", "");
-    button.textContent = text;
-    button.title = title;
-    button.addEventListener("click", (e) => {
-        e.stopPropagation();
-        onClick();
-    });
-    return button;
-  }
-
-  /**
-   * Mermaid図をSVGとしてクリップボードにコピーします。
-   */
-  private async copyAsSvg(containerEl: HTMLElement) {
-    const svgEl = containerEl.querySelector("svg");
-    if (!svgEl) {
+  private async copyAsSvg(originalContainerEl: HTMLElement) {
+    const srcSvg = originalContainerEl.querySelector("svg");
+    if (!srcSvg) {
       new Notice("SVG要素が見つかりませんでした。");
       return;
     }
-    const svgData = new XMLSerializer().serializeToString(svgEl);
-    await navigator.clipboard.writeText(svgData);
+
+    const svgClone = this.cloneSvgWithInlineStyles(srcSvg);
+    this.replaceHtmlLabels(svgClone);
+    svgClone.removeAttribute("class"); // テーマ依存のclassを除去
+
+    if (!svgClone.hasAttribute("viewBox")) {
+      const { width, height } = srcSvg.getBBox();
+      svgClone.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    }
+    if (!svgClone.hasAttribute("width") || !svgClone.hasAttribute("height")) {
+      const rect = srcSvg.getBoundingClientRect();
+      svgClone.setAttribute("width", rect.width.toString());
+      svgClone.setAttribute("height", rect.height.toString());
+    }
+    const data = new XMLSerializer().serializeToString(svgClone);
+    await navigator.clipboard.writeText(data);
     new Notice("SVGデータをクリップボードにコピーしました。");
   }
 
   /**
-   * Mermaid図をPNGとしてクリップボードにコピーします。
+   * 【修正済み】Mermaid図をPNGとしてクリップボードにコピーします。
    */
-  private async copyAsPng(containerEl: HTMLElement) {
-    const svgEl = containerEl.querySelector("svg");
-    if (!svgEl) {
+  private async copyAsPng(originalContainerEl: HTMLElement) {
+    const srcSvg = originalContainerEl.querySelector("svg");
+    if (!srcSvg) {
       new Notice("SVG要素が見つかりませんでした。");
       return;
     }
-    
-    new Notice("PNGに変換中...");
-
+    new Notice("PNGに変換中…");
     try {
-        const svgData = new XMLSerializer().serializeToString(svgEl);
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-        if(!ctx) return;
-
-        const svgBlob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
-        const url = URL.createObjectURL(svgBlob);
-
-        const img = new Image();
-        img.onload = async () => {
-            canvas.width = img.width;
-            canvas.height = img.height;
-            ctx.drawImage(img, 0, 0);
-            URL.revokeObjectURL(url);
-
-            canvas.toBlob(async (blob) => {
-                if (blob) {
-                    await navigator.clipboard.write([
-                        new ClipboardItem({ "image/png": blob }),
-                    ]);
-                    new Notice("PNG画像をクリップボードにコピーしました。");
-                }
-            }, "image/png");
-        };
-        img.onerror = () => {
-            URL.revokeObjectURL(url);
-            new Notice("PNGへの変換に失敗しました。");
-        };
-        img.src = url;
-
+      const svgClone = this.cloneSvgWithInlineStyles(srcSvg);
+      this.replaceHtmlLabels(svgClone);
+      const { width, height } = srcSvg.getBoundingClientRect();
+      // --- 高解像度出力用スケール係数（設定から取得） ---
+      const scale = this.settings.pngScale ?? 2;
+      svgClone.setAttribute("width", `${width * scale}`);
+      svgClone.setAttribute("height", `${height * scale}`);
+      const svgData = new XMLSerializer().serializeToString(svgClone);
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { throw new Error("Canvasコンテキストの取得に失敗しました。"); }
+      canvas.width = width * scale;
+      canvas.height = height * scale;
+      const dataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgData)))}`;
+      const img = new Image();
+      img.onload = () => {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(async (blob) => {
+          if (!blob) { throw new Error("PNG Blobの生成に失敗しました。"); }
+          await navigator.clipboard.write([ new ClipboardItem({ "image/png": blob }) ]);
+          new Notice("PNG画像をクリップボードにコピーしました。");
+        }, "image/png");
+      };
+      img.onerror = () => { throw new Error("PNGへの変換に失敗しました (画像読み込みエラー)。"); };
+      img.src = dataUrl;
     } catch (error) {
-        console.error("PNG copy failed:", error);
-        new Notice("PNGのコピーに失敗しました。");
+      console.error("PNG copy failed:", error);
+      new Notice(`PNGのコピーに失敗しました: ${error.message}`);
     }
+  }
+}
+
+// --- 設定タブクラス ---
+class MermaidZoomSettingTab extends PluginSettingTab {
+  plugin: MermaidZoomPlugin;
+  constructor(app: App, plugin: MermaidZoomPlugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+    containerEl.createEl("h2", { text: "Mermaid Zoom Plugin 設定" });
+    new Setting(containerEl)
+      .setName("PNG解像度スケール")
+      .setDesc("PNGエクスポート時の解像度倍率（例: 2 で2倍、3で3倍）")
+      .addText(text => text
+        .setPlaceholder("2")
+        .setValue(this.plugin.settings.pngScale.toString())
+        .onChange(async (value) => {
+          const num = Number(value);
+          if (!isNaN(num) && num > 0) {
+            this.plugin.settings.pngScale = num;
+            await this.plugin.saveData(this.plugin.settings);
+          }
+        })
+      );
   }
 }
