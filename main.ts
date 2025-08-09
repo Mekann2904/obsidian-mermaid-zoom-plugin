@@ -1,4 +1,4 @@
-import { Plugin, Notice, PluginSettingTab, App, Setting } from "obsidian";
+import { Plugin, Notice, PluginSettingTab, App, Setting, EventRef } from "obsidian";
 
 // --- 設定インターフェース ---
 interface MermaidZoomPluginSettings {
@@ -115,9 +115,14 @@ export default class MermaidZoomPlugin extends Plugin {
     this.currentModal = modal;
 
     // --- イベントリスナー ---
+    let fileOpenRef: EventRef | null = null;
     const closeModal = () => {
       modal.remove();
       document.removeEventListener("keydown", handleKeyDown);
+      if (fileOpenRef) {
+        this.app.workspace.offref(fileOpenRef);
+        fileOpenRef = null;
+      }
       this.currentModal = null;
     };
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -128,8 +133,50 @@ export default class MermaidZoomPlugin extends Plugin {
       if (e.target === modal) closeModal();
     });
 
+    // Mermaid内の内部リンクをクリックしたらモーダルを閉じる
+    content.addEventListener("click", (e) => {
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      const link = t.closest("a.internal-link, .internal-link, a[data-href], [data-href]") as HTMLElement | SVGAElement | null;
+      if (!link) return;
+
+      // 既存の動きを止めて自前で遷移
+      e.preventDefault();
+      e.stopPropagation();
+
+      // SVG内リンクも考慮して href を抽出
+      const getHref = (el: Element): string | null => {
+        const dataHref = el.getAttribute("data-href");
+        if (dataHref) return dataHref;
+        // HTMLAnchorElement
+        const hrefAttr = el.getAttribute("href");
+        if (hrefAttr) return hrefAttr;
+        // SVG <a> の href (SVGAnimatedString)
+        const anyEl = el as any;
+        if (anyEl && anyEl.href && typeof anyEl.href.baseVal === "string") {
+          return anyEl.href.baseVal as string;
+        }
+        const xlink = el.getAttribute("xlink:href");
+        if (xlink) return xlink;
+        return null;
+      };
+
+      const target = getHref(link);
+      if (!target) return;
+
+      const sourcePath = this.app.workspace.getActiveFile()?.path ?? "";
+      const newLeaf = (e as MouseEvent).metaKey || (e as MouseEvent).ctrlKey;
+      this.app.workspace.openLinkText(target, sourcePath, newLeaf);
+      closeModal();
+    });
+
+    // ノート遷移（file-open）が発生したらモーダルを閉じる（保険）
+    fileOpenRef = this.app.workspace.on("file-open", () => {
+      if (this.currentModal) closeModal();
+    });
+
     // (パン・ズーム処理は変更なし)
-    content.addEventListener('mousedown', (e) => { isPanning = true; content.classList.add('grabbing'); lastMouseX = e.pageX; lastMouseY = e.pageY; });
+    content.addEventListener('mousedown', (e) => { if ((e.target as HTMLElement)?.closest('a, .internal-link, [data-href]')) return; isPanning = true; content.classList.add('grabbing'); lastMouseX = e.pageX; lastMouseY = e.pageY; });
     content.addEventListener('mouseleave', () => { isPanning = false; content.classList.remove('grabbing'); });
     content.addEventListener('mouseup', () => { isPanning = false; content.classList.remove('grabbing'); });
     content.addEventListener('mousemove', (e) => { if (!isPanning) return; e.preventDefault(); const dx = e.pageX - lastMouseX; const dy = e.pageY - lastMouseY; panX += dx; panY += dy; lastMouseX = e.pageX; lastMouseY = e.pageY; updateTransform(); });
