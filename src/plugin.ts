@@ -123,6 +123,15 @@ export default class MermaidZoomPlugin extends Plugin {
     clonedElement.classList.add(themeClass);
     clonedElement.querySelector("svg")?.classList.add(themeClass);
 
+    // 配置と原点を左上に固定し、ズレを防止
+    (content as HTMLElement).style.position = "relative";
+    Object.assign(clonedElement.style, {
+      position: "absolute",
+      top: "0",
+      left: "0",
+      transformOrigin: "0 0",
+    } as Partial<CSSStyleDeclaration>);
+
     const closeModal = () => {
       modal.remove();
       document.removeEventListener("keydown", handleKeyDown);
@@ -182,14 +191,37 @@ export default class MermaidZoomPlugin extends Plugin {
     content.addEventListener('mouseup', () => { isPanning = false; content.classList.remove('grabbing'); });
     content.addEventListener('mouseleave', () => { isPanning = false; content.classList.remove('grabbing'); });
     content.addEventListener('mousemove', (e) => { if (!isPanning) return; e.preventDefault(); panX += e.pageX - lastMouseX; panY += e.pageY - lastMouseY; lastMouseX = e.pageX; lastMouseY = e.pageY; updateTransform(); });
-    content.addEventListener("wheel", (e) => { e.preventDefault(); const delta = e.deltaY < 0 ? 0.2 : -0.2; zoomLevel = clamp(zoomLevel + delta, 0.1, 10); updateTransform(); }, { passive: false });
+    content.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const rect = content.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const old = zoomLevel;
+      const zoomFactor = e.deltaY < 0 ? 1.2 : 1 / 1.2; // 乗算型ズーム
+      const next = clamp(old * zoomFactor, 0.1, 10);
+
+      // ズーム前ローカル座標（逆変換）を保持
+      const localX = (mouseX - panX) / old;
+      const localY = (mouseY - panY) / old;
+
+      // 同一点がカーソル下に来るようpanを再計算
+      panX = mouseX - localX * next;
+      panY = mouseY - localY * next;
+      zoomLevel = next;
+      updateTransform();
+    }, { passive: false });
 
     requestAnimationFrame(() => {
       const contentRect = content.getBoundingClientRect();
       const cloneRect = clonedElement.getBoundingClientRect();
-      zoomLevel = Math.min(contentRect.width / cloneRect.width, contentRect.height / cloneRect.height) * 0.95;
-      panX = 0;
-      panY = 0;
+      zoomLevel = Math.min(
+        contentRect.width / cloneRect.width,
+        contentRect.height / cloneRect.height
+      ) * 0.95;
+      // 中央寄せして初期表示を安定させる
+      panX = (contentRect.width - cloneRect.width * zoomLevel) / 2;
+      panY = (contentRect.height - cloneRect.height * zoomLevel) / 2;
       updateTransform();
     });
   }
