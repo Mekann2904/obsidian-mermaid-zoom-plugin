@@ -2,7 +2,7 @@
   position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
   background-color: rgba(0, 0, 0, 0.5);
   display: flex; flex-direction: column; justify-content: center; align-items: center;
-  z-index: 10000;
+  z-index: 10000000;
 }
 .mermaid-zoom-content {
   width: 90vw; height: 90vh;
@@ -48,4 +48,320 @@
 }
 body.theme-light .mermaid-zoom-content {
   background-color: #fff !important;
+}
+
+/* === Mermaid Fix Modal Styles === */
+
+.mermaid-fix-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 999999; /* Obsidian UI を確実に上回る */
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ズーム表示中は修正モーダルの操作を無効化（重なり順の問題を回避） */
+.mermaid-zoom-active .mermaid-fix-backdrop,
+.mermaid-zoom-active .mermaid-fix-modal {
+  pointer-events: none !important;
+  visibility: hidden !important; /* 描画順の問題を無視して下層に退避 */
+}
+
+.mermaid-fix-backdrop-visible {
+  opacity: 1;
+}
+
+.mermaid-fix-modal {
+  position: relative;
+  width: 96vw; /* 横幅を拡大 */
+  max-width: none; /* 横幅制限を解除 */
+  height: 90vh;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  z-index: 1000000; /* バックドロップより上 */
+  opacity: 0;
+  transform: scale(0.9);
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+/* 退避アニメーション（ズーム表示前に適用） */
+.mermaid-fix-backdrop.mermaid-fix-retreating { opacity: 0; }
+.mermaid-fix-modal.mermaid-fix-retreating { opacity: 0; transform: scale(0.95); }
+
+.mermaid-fix-modal-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.mermaid-fix-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.mermaid-fix-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.mermaid-fix-close-btn {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.mermaid-fix-close-btn:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.mermaid-fix-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  overflow: hidden;
+}
+
+.mermaid-fix-controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.mermaid-fix-mode-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.mermaid-fix-mode-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.mermaid-fix-mode-btn:hover {
+  background: var(--background-modifier-hover);
+}
+
+.mermaid-fix-mode-btn.active {
+  background: #ff4444 !important;
+  color: white !important;
+  border-color: #ff4444 !important;
+  font-weight: bold !important;
+}
+
+.mermaid-fix-error {
+  padding: 8px 12px;
+  background: rgba(244, 67, 54, 0.1);
+  border: 1px solid #f44336;
+  border-radius: 4px;
+  color: #f44336;
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.mermaid-fix-panels {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.mermaid-fix-inline-mode {
+  grid-template-columns: 2fr 1fr;
+}
+
+.mermaid-fix-inline-mode .mermaid-fix-panel:first-child {
+  flex: 2;
+}
+
+.mermaid-fix-inline-mode .mermaid-fix-panel:last-child {
+  flex: 1;
+}
+
+.mermaid-fix-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.mermaid-fix-label {
+  font-weight: 600;
+  color: var(--text-normal);
+  font-size: 14px;
+}
+
+.mermaid-fix-code {
+  flex: 1;
+  margin: 0;
+  padding: 12px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.mermaid-fix-code[contenteditable="true"] {
+  outline: none;
+  border-color: var(--interactive-accent);
+  background: var(--background-primary);
+}
+
+.mermaid-fix-code[contenteditable="true"]:focus {
+  border-color: var(--interactive-accent-hover);
+  box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb), 0.2);
+}
+
+/* 差分表示用スタイル */
+.mermaid-fix-diff {
+  flex: 1;
+  margin: 0;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: auto;
+}
+
+.mermaid-fix-diff-line {
+  padding: 2px 12px;
+  border-left: 3px solid transparent;
+  white-space: pre;
+  word-break: break-all;
+}
+
+.mermaid-fix-diff-line.unchanged {
+  background: var(--background-secondary);
+  border-left-color: var(--background-modifier-border);
+}
+
+.mermaid-fix-diff-line.added {
+  background: rgba(76, 175, 80, 0.1);
+  border-left-color: #4caf50;
+  color: var(--text-normal);
+}
+
+.mermaid-fix-diff-line.removed {
+  background: rgba(244, 67, 54, 0.1);
+  border-left-color: #f44336;
+  color: var(--text-normal);
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.mermaid-fix-diff-line-number {
+  display: inline-block;
+  width: 40px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: right;
+  margin-right: 8px;
+  user-select: none;
+}
+
+.mermaid-fix-render {
+  height: 400px;
+  min-height: 300px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  overflow: auto;
+  background: white;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  cursor: zoom-in;
+  padding: 16px;
+}
+
+.mermaid-fix-render .mermaid {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mermaid-fix-loading {
+  color: var(--text-muted);
+}
+
+.mermaid-fix-footer {
+  padding: 16px 20px;
+  border-top: 1px solid var(--background-modifier-border);
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.mermaid-fix-btn {
+  padding: 8px 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.mermaid-fix-btn:hover {
+  background: var(--background-modifier-hover);
+}
+
+.mermaid-fix-btn-primary {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.mermaid-fix-btn-primary:hover {
+  background: var(--interactive-accent-hover);
+}
+
+/* 置換ボタンをより目立たせる */
+.mermaid-fix-btn-replace {
+  font-weight: 700;
+  padding: 10px 20px;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.1) inset, 0 4px 12px rgba(0,0,0,0.15);
 }
